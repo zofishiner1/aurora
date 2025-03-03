@@ -187,7 +187,7 @@ class UserStorage:
 if not os.path.exists('data/filesCLIENT/'):
     os.makedirs('data/filesCLIENT/')
 
-async def download_file(url, filepath):
+async def download_file_to_server(url, filepath):
     """Асинхронная функция для скачивания файла."""
     async with aiohttp.ClientSession() as session:
         try:
@@ -210,7 +210,7 @@ async def check_and_download_model():
     if not os.path.isfile('data/filesCLIENT/vosk-model-small-ru-0.22.zip'):
         print("Файл data/filesCLIENT/vosk-model-small-ru-0.22.zip не найден. Начинаю загрузку...")
         url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
-        await download_file(url, 'data/filesCLIENT/vosk-model-small-ru-0.22.zip')
+        await download_file_to_server(url, 'data/filesCLIENT/vosk-model-small-ru-0.22.zip')
     else:
         print("Файл data/filesCLIENT/vosk-model-small-ru-0.22.zip уже существует.")
 
