@@ -9,6 +9,8 @@ import random
 import re
 import pyttsx3
 from art import tprint
+import websockets
+import asyncio
 
 # Инициализация логотипа программы
 tprint("AURORA", "tarty1")
@@ -19,19 +21,45 @@ BASE_URL = "http://aurorav.sytes.net:808/api"
 access_token = None
 key = None
 
-def synthesize_speech(text, rate=150, volume=1.0, voice_id=None):
-    """Функция для синтеза речи из текста."""
-    engine = pyttsx3.init()  # Инициализация движка
-    engine.setProperty('rate', rate)  # Установка скорости речи
-    engine.setProperty('volume', volume)  # Установка громкости (от 0.0 до 1.0)
-    
-    voices = engine.getProperty('voices')  # Получение доступных голосов
-    
-    if voice_id is not None:
-        engine.setProperty('voice', voices[voice_id].id)  # Установка голоса, если указан
-    
-    engine.say(text)  # Преобразование текста в речь
-    engine.runAndWait()  # Ожидание завершения произнесения текста
+# Настройки аудио
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = 48000
+
+# Функция для получения текста и аудио-потока
+async def play_audio(websocket):
+    p = pyaudio.PyAudio()
+    stream = p.open(format=FORMAT,
+                    channels=CHANNELS,
+                    rate=RATE,
+                    output=True)
+
+    while True:
+        try:
+            message = await websocket.recv()
+            if isinstance(message, str):
+                if message == "stream ended":
+                    print("Стрим завершен. Закрытие соединения...")
+                    break  # Выход из цикла для закрытия соединения
+                print(f"Получено сообщение: {message}")
+            else:
+                # Проигрывание аудио
+                stream.write(message)
+        except websockets.ConnectionClosed:
+            print("Соединение разорвано.")
+            break
+
+async def send_text_to_server(text, token):
+    async with websockets.connect("ws://aurorav.sytes.net:808/synthesize-and-stream") as websocket:
+        # Отправка токена и текста в одном сообщении
+        await websocket.send(f"{token}:{text}")
+        await play_audio(websocket)
+
+async def main():
+    text = "Здравствуйте! Меня зовут Аврора, я виртуальный помощник."
+    token = "your_token_here"
+    await send_text_to_server(text, token)
 
 def contains_russian_or_special(input_string):
     """Проверка наличия русских букв и специальных символов в строке."""
@@ -108,7 +136,6 @@ def chat(message, access_token):
     }
     
     print("Аврора: Придумываю ответ...", end='\r')
-    synthesize_speech("Придумываю ответ...")
     
     response = requests.post(url, json=data, headers=headers)
     
@@ -264,6 +291,38 @@ def recognize_speech(recognizer, input_device_index):
         stream.close()
         p.terminate()
 
+async def main():
+    while True:
+        try:
+            user_speech = recognize_speech(recognizer, selected_index)
+
+            if user_speech is not None:
+                print("Вы:", user_speech)
+
+                if user_speech.lower().startswith("поиск "):
+                    search_query = user_speech[7:].strip()
+                    search_response = search(search_query, access_token)
+                    search_result = decrypt(search_response['result'], key)
+                    print("Результаты поиска:", search_result)
+
+                    # synthesize_speech(search_result, volume=0.9, voice_id=0) # Заменено на connect_and_stream
+                    await send_text_to_server(text=search_result, token=access_token)
+                    continue
+
+                if contains_russian_or_special(user_speech):
+                    chat_response = chat(user_speech, access_token)
+
+                    if chat_response is not None:
+                        chat_response_decrypted = decrypt(chat_response['response'], key)
+                        print("Ответ от чата:", chat_response_decrypted + "\n\n")
+                        # synthesize_speech(chat_response_decrypted, volume=0.9, voice_id=0) # Заменено на connect_and_stream
+                        await send_text_to_server(text=chat_response_decrypted, token=access_token)
+                else:
+                    print("Речь не распознана.") 
+        except KeyboardInterrupt:
+            print("\nЗавершение работы...")
+            break
+
 # Основной код программы
 action = int(input("Выберите действие:\n1)Регистрация\n2)Вход в систему\n>> "))
 username = input("Имя пользователя>> ")
@@ -322,29 +381,6 @@ elif action == 2:
                     print("Не удалось найти рабочий микрофон. Программа завершена.")
                     exit()
 
-            while True:
-                user_speech = recognize_speech(recognizer, selected_index)
-
-                if user_speech is not None:
-                    print("Вы:", user_speech)
-
-                    if user_speech.lower().startswith("поиск "):
-                        search_query = user_speech[7:].strip()
-                        search_response = search(search_query, access_token)
-                        search_result = decrypt(search_response['result'], key)
-                        print("Результаты поиска:", search_result)
-
-                        synthesize_speech(search_result, volume=0.9, voice_id=0)
-                        continue
-
-                    if contains_russian_or_special(user_speech):
-                        chat_response = chat(user_speech, access_token)
-
-                        if chat_response is not None:
-                            chat_response_decrypted = decrypt(chat_response['response'], key)
-                            print("Ответ от чата:", chat_response_decrypted + "\n\n")
-                            synthesize_speech(chat_response_decrypted, volume=0.9, voice_id=0)
-                    else:
-                        print("Речь не распознана.") 
+            asyncio.run(main())
         except KeyboardInterrupt:
             print("\nЗавершение работы...")

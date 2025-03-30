@@ -5,3 +5,6 @@ aurora_client.spec
 mic_settings.json
 test.py
 TODO
+__pycache__
+vosk-model-small-ru-0.22
+models

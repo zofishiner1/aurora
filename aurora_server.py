@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import aiohttp
 from bs4 import BeautifulSoup
@@ -16,6 +16,52 @@ import aiosqlite
 import string
 import random
 import ollama
+import torch
+import soundfile as sf
+import aiofiles
+
+# Указание использования GPU с помощью CUDA
+device = torch.device("cuda")
+
+# Установка директории для загрузки моделей
+torch.hub.set_dir('./models')
+
+# Загрузка модели Silero TTS
+model, _ = torch.hub.load(repo_or_dir='snakers4/silero-models',
+                                  model='silero_tts',
+                                  language='ru',
+                                  speaker='v4_ru')
+
+model.to(device)  # Перенос модели на GPU
+
+async def synthesize_text(text, token, speaker='xenia', sample_rate=48000, output_file=None):
+    if output_file is None:
+        output_file = f"output_{token}.wav"
+    
+    def _synthesize_text():
+
+        try:
+            # Генерация аудио из текста
+            audio = model.apply_tts(text=text,
+                                speaker=speaker,
+                                sample_rate=sample_rate)
+
+            # Сохранение аудио в файл WAV
+            sf.write(output_file, audio, sample_rate)
+        except Exception as e:
+            return e
+
+    await asyncio.to_thread(_synthesize_text)
+    
+    return output_file
+
+async def audio_stream_generator(file_path: str):
+    async with aiofiles.open(file_path, mode="rb") as file:
+        while chunk := await file.read(1024 * 1024):  # Читаем по 1MB
+            yield chunk
+
+async def async_remove_file(file_path: str):
+    await asyncio.to_thread(os.remove, file_path)
 
 async def upd_ip():
     """
@@ -605,3 +651,33 @@ async def download_file(
                 yield chunk
 
     return StreamingResponse(stream_file(), media_type='application/octet-stream')
+
+@app.websocket("/synthesize-and-stream")
+async def websocket_synthesize_and_stream(websocket: WebSocket):
+    await websocket.accept()
+    
+    try:
+        # Ожидание текста от пользователя
+        while True:
+            message = await websocket.receive_text()
+            parts = message.split(":", 1)
+            if len(parts) != 2:
+                raise HTTPException(status_code=400, detail="Invalid message format")
+            
+            token, text = parts
+            
+            print(f"Получен текст от пользователя с токеном {token}")
+            
+            # Синтез речи асинхронно
+            output_file = await synthesize_text(text, token)
+            
+            # Отправка аудио по частям
+            async for chunk in audio_stream_generator(output_file):
+                await websocket.send_bytes(chunk)
+
+            await websocket.send_text("stream ended")
+            
+            # Удаление временного файла аудио асинхронно
+            asyncio.create_task(async_remove_file(output_file))
+    except WebSocketDisconnect:
+        print("Соединение разорвано.")
